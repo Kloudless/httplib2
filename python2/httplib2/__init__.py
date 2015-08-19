@@ -1925,7 +1925,7 @@ class Http(object):
         a string that contains the response entity body.
         """
         conn_key = ''
-        
+
         try:
             if headers is None:
                 headers = {}
@@ -1942,14 +1942,15 @@ class Http(object):
             proxy_info = self._get_proxy_info(scheme, authority)
 
             conn_key = scheme + ":" + authority
-            conn = self.connections.get(conn_key)
+            conn = self._get_conn(conn_key)
+
             if conn is None:
                 if not connection_type:
                     connection_type = SCHEME_TO_CONNECTION[scheme]
                 certs = list(self.certificates.iter(authority))
                 if scheme == "https":
                     if certs:
-                        conn = self.connections[conn_key] = connection_type(
+                        conn = connection_type(
                             authority,
                             key_file=certs[0][0],
                             cert_file=certs[0][1],
@@ -1957,22 +1958,26 @@ class Http(object):
                             proxy_info=proxy_info,
                             ca_certs=self.ca_certs,
                             disable_ssl_certificate_validation=self.disable_ssl_certificate_validation,
-                            ssl_version=self.ssl_version,
+                            ssl_version=self.ssl_version
                         )
                     else:
-                        conn = self.connections[conn_key] = connection_type(
+                        conn = connection_type(
                             authority,
                             timeout=self.timeout,
                             proxy_info=proxy_info,
                             ca_certs=self.ca_certs,
                             disable_ssl_certificate_validation=self.disable_ssl_certificate_validation,
-                            ssl_version=self.ssl_version,
+                            ssl_version=self.ssl_version
                         )
                 else:
-                    conn = self.connections[conn_key] = connection_type(
+                    conn = connection_type(
                         authority, timeout=self.timeout, proxy_info=proxy_info
                     )
+
                 conn.set_debuglevel(debuglevel)
+                self.connections.setdefault(conn_key, []).append(conn)
+
+            conn.busy = True
 
             if "range" not in headers and "accept-encoding" not in headers:
                 headers["accept-encoding"] = "gzip, deflate"
@@ -2169,8 +2174,22 @@ class Http(object):
                     response.reason = "Bad Request"
             else:
                 raise
+        finally:
+            if conn:
+                conn.busy = False
 
         return (response, content)
+
+    def _get_conn(self, conn_key):
+        """Returns an a non-busy connection if available.
+        """
+        conn = self.connections.get(conn_key)
+        if type(conn) in [list, tuple, set]:
+            for c in conn:
+                if not getattr(c, 'busy', True):
+                    return c
+        else:
+            return conn
 
     def _get_proxy_info(self, scheme, authority):
         """Return a ProxyInfo instance (or None) based on the scheme
